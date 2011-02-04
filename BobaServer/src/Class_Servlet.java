@@ -1,12 +1,17 @@
+import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.net.URL;
+import java.io.StringReader;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.Hashtable;
 import java.util.Scanner;
+import java.util.Vector;
 
+import javax.servlet.ServletConfig;
 import javax.servlet.ServletException;
 import javax.servlet.ServletOutputStream;
 import javax.servlet.http.HttpServlet;
@@ -19,6 +24,7 @@ import javax.xml.parsers.ParserConfigurationException;
 import org.w3c.dom.DOMException;
 import org.w3c.dom.Document;
 import org.w3c.dom.NodeList;
+import org.xml.sax.InputSource;
 import org.xml.sax.SAXException;
  
 public class Class_Servlet extends HttpServlet{ private static final long serialVersionUID = 1L;
@@ -27,35 +33,84 @@ public class Class_Servlet extends HttpServlet{ private static final long serial
 	final int NO_COURSES_TO_VALIDATE=3;
 	final int XML_FORMAT_ERROR=4;
 	
+	Hashtable<String, Course> table;
+	
 	Connection con;
-	public void intit(){	
-		con=getConnect();
+	 public void init(ServletConfig config){
+		if((con=getConnect())==null)
+			this.destroy();
+		if(!fill_table())
+			this.destroy();
+		System.out.println("Test");
 	}
-	public void doGet(HttpServletRequest req, HttpServletResponse res)throws ServletException, IOException {
-		ServletOutputStream out = res.getOutputStream();
-	    res.setContentType("text/html"); 
-
-	    String file = "/index.html";
-	    if (file == null) {
-	      out.println("Extra path info was null; should be a resource to view");
-	      return;
-	    }
-
-	    URL url = getServletContext().getResource(file);
-	    if (url == null) {
-	      out.println("Resource " + file + " not found");
-	      return;
-	    }
-	    Scanner s=new Scanner(url.openStream());
-	    while(s.hasNext()){
-	    	out.println(s.nextLine());
-	    }
+	
+	/**This method fills the hashtable with courses
+	 * Then each course, is stored with out any classes
+	 * If a course is attempted to be validated then the classes will be populated at the time it is needed.
+	 * @return
+	 */
+	private boolean fill_table(){
+		System.out.println("Initilizing Data Structures, Please be patient. this may take up to 3 mins....");
+		int count=0;
+		long start=System.currentTimeMillis();
+		try {
+			Statement stmt=con.createStatement();
+			String sql="SELECT DESCR, SUBJECT, CATALOG_NBR From School.Courses ORDER BY SUBJECT, CATALOG_NBR, DESCR";
+			
+			ResultSet res=stmt.executeQuery(sql);
+			table=new Hashtable<String, Course>();
+			
+			while(res.next()){
+				count++;
+				if(count%500==0)System.out.println(count+"...");
+				String title=res.getString("DESCR").trim();
+				String catalog_number=res.getString("CATALOG_NBR").trim();
+				String subject=res.getString("SUBJECT").trim();
+				Course c = new Course( title, subject, catalog_number);
+				c.fillClass(con);
+				table.put(subject+":"+catalog_number, c);
+			}
+			res.close();
+		} catch (SQLException e) {
+			e.printStackTrace();
+			System.out.println("Initilizing Data Structures-Failed");
+			return false;
+		}
+		long end=System.currentTimeMillis();
+		start=(end-start)/1000;
+		System.out.println("Initilizing Data Structures-DONE!, took "+start);
+		return true;
+	}
+	
+	public void doGet(HttpServletRequest req, HttpServletResponse res)throws ServletException{
+		ServletOutputStream out=null;
+		try {
+			out = res.getOutputStream();
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+	    res.setContentType("text/html");
+	    
+		try {
+			Scanner s = new Scanner(new File("BobaServer/index.html"));
+			while(s.hasNext()){
+		    	out.println(s.nextLine());
+		    }
+		} catch (FileNotFoundException e) {
+		//	e.printStackTrace();
+			return_html(e.getMessage(),out);
+		} catch (IOException e) {
+		//	e.printStackTrace();
+			return_html(e.getMessage(),out);
+		}
 	    
 	    
+	    return;
 	  
 	}
+	
 	public void doPost(HttpServletRequest req, HttpServletResponse resp){
-		System.out.println("DoPost:::>\n");
 		String res="";
 		Document doc=null;
 		ServletOutputStream outs=null;
@@ -68,10 +123,13 @@ public class Class_Servlet extends HttpServlet{ private static final long serial
 	        if(res==null) throw new NullPointerException();
 			DocumentBuilderFactory dbfac = DocumentBuilderFactory.newInstance();      
 			DocumentBuilder docBuilder = dbfac.newDocumentBuilder();
-			
-	        doc = docBuilder.
-	   
-	        
+			InputSource is = new InputSource();
+		    is.setCharacterStream(new StringReader(res));
+	        doc = docBuilder.parse(is);
+	       
+	        if(doc==null) throw new NullPointerException();
+	        doc.normalize();
+	        doc.normalizeDocument();
 		}
 		catch (ParserConfigurationException e) {
 			e.printStackTrace();
@@ -91,7 +149,11 @@ public class Class_Servlet extends HttpServlet{ private static final long serial
 			error_document(XML_FORMAT_ERROR,e.getMessage(),outs);
 			return;
 		}
-		String type=doc.getElementById("Request_Type").getNodeValue();
+		
+		NodeList nodes = doc.getElementsByTagName("Request_Type");
+		String type=nodes.item(0).getFirstChild().getTextContent();
+		
+		if(type==null)type="";
 		
 		if(type.equals("DegreeCourseList")){
 		
@@ -148,8 +210,8 @@ public class Class_Servlet extends HttpServlet{ private static final long serial
 	private String validate_course_list(Document doc) {
 		
 		String xml="<Response>\n"+
-					"<Response_Type>“Validation”</Response_Type>\n" +
-					"<Course>\n";
+					"<Response_Type>Validation</Response_Type>\n";
+					
 		NodeList list = doc.getElementsByTagName("Course");
 		
 		if(list.getLength()==0){
@@ -157,106 +219,91 @@ public class Class_Servlet extends HttpServlet{ private static final long serial
 		}
 		
 		for(int i=0; i<list.getLength();i++){
-			String v=list.item(i).getNodeValue();
+			String v=list.item(i).getFirstChild().getTextContent();
 			String sub=v.substring(0,3);
 			String num=v.substring(3);
 			
-			xml=xml+"<Course>\n" +
-					"<Subject_CourseID>"+sub+":"+num+"</Subject_CourseID>";
-			
-			String sql="Select CLASS_NBR, SUBJECT, CATALOG_NBR, CLASS_SECTION, " +
-					"DESCR, From_Date, Cancel_Date, MTWRFSD_Days, " +
-					"From_Time, To_Time, Component FROM School.Courses where ";
+			xml=xml+"\t<Course>\n"+
+					"\t\t<Subject_CourseID>"+v+"</Subject_CourseID>\n";
 			
 			
-			sql=sql+" (SUBJECT='"+sub+"' AND CATALOG_NBR='"+num+"') ORDER BY SUBJECT, CATALOG_NBR, From_Date, To_Date, DESCR";	
-			
-			try {
-				Statement stmt=con.createStatement();
-				ResultSet res=stmt.executeQuery(sql);
-				if(!res.next()){
-					return error_document(COURSE_NOT_FOUND,"No Information could be found on "+sub+":"+num+".");		
-				}
-				do{
-					xml=xml+"<Class>\n";
-					xml=xml+"<Course_ID>"+res.getString("CLASS_NBR")+"</Course_ID>\n";
-					xml=xml+"<Component>"+res.getString("Component")+"</Component>\n";
-					xml=xml+"<Title>"+res.getShort("DESCR")+"</Title>\n";
-					xml=xml+"<Time>\n";
-						xml=xml+"<Semester>"+getSemester(res.getString("From_Date"),res.getString("To_Date"))+"</Semester>\n";
-						xml=xml+"<Year>"+getYear(res.getString("From_Date"))+"</Year>\n";
-						xml=xml+"<Days>"+res.getString("MTWRFSD_Days")+"</Days>\n";
-						xml=xml+"<Time_Start>"+res.getString("From_Time")+"</Time_Start>\n";
-						xml=xml+"<Time_End>"+res.getString("To_Time")+"</Time_End>\n";
-					xml=xml+"</Time>\n";		
-					xml=xml+"</Class>\n";
-					
-				}while(res.next());
-				
-				xml=xml+"</Course>\n" +
-						"</Response>\n";
-				
-			} catch (SQLException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
+			Course c=table.get(v);
+			if(c==null){
+				return error_document(COURSE_NOT_FOUND,"No Information could be found on "+sub+":"+num+".");		
 			}
+			
+			Vector<Clas> class_list=c.getClases();
+			Vector<Clas> lab_list=c.getLabs();
+			if(class_list.size()==0){
+				return error_document(COURSE_NOT_FOUND,sub+":"+num+", is not being offered.");		
+			}
+			
+			xml=xml+"\t\t<Main_Course>\n";
+			for(int j=0; j<class_list.size(); j++){
+				Clas clas=class_list.get(j);
+				xml=xml+"\t\t\t<Class>\n";
+					xml=xml+"\t\t\t\t<Class_ID>"+clas.course_id+"</Class_ID>\n";
+					xml=xml+"\t\t\t\t<Component>"+clas.component+"</Component>\n";
+					xml=xml+"\t\t\t\t<Title>"+c.title+"</Title>\n";
+					xml=xml+"\t\t\t\t<Time>\n";
+						xml=xml+"\t\t\t\t\t<Semester>"+clas.semester+"</Semester>\n";
+						xml=xml+"\t\t\t\t\t<Year>"+clas.start_year+"</Year>\n";
+						xml=xml+"\t\t\t\t\t<Days>"+clas.getDays()+"</Days>\n";
+						xml=xml+"\t\t\t\t\t<Time_Start>"+clas.from_time+"</Time_Start>\n";
+						xml=xml+"\t\t\t\t\t<Time_End>"+clas.to_time+"</Time_End>\n";
+					xml=xml+"\t\t\t\t</Time>\n";		
+				xml=xml+"\t\t\t</Class>\n";	
+			}
+			xml=xml+"\t\t</Main_Course>\n";
+			if(lab_list.size()!=0){
+				xml=xml+"\t\t<Lab_Course>\n";
+					for(int j=0; j<lab_list.size(); j++){
+						Clas clas=lab_list.get(j);
+						xml=xml+"\t\t\t<Class>\n";
+							xml=xml+"\t\t\t\t<Class_ID>"+clas.course_id+"</Class_ID>\n";
+							xml=xml+"\t\t\t\t<Component>"+clas.component+"</Component>\n";
+							xml=xml+"\t\t\t\t<Title>"+c.title+"</Title>\n";
+							xml=xml+"\t\t\t\t<Time>\n";
+								xml=xml+"\t\t\t\t\t<Semester>"+clas.semester+"</Semester>\n";
+								xml=xml+"\t\t\t\t\t<Year>"+clas.start_year+"</Year>\n";
+								xml=xml+"\t\t\t\t\t<Days>"+clas.getDays()+"</Days>\n";
+								xml=xml+"\t\t\t\t\t<Time_Start>"+clas.from_time+"</Time_Start>\n";
+								xml=xml+"\t\t\t\t\t<Time_End>"+clas.to_time+"</Time_End>\n";
+							xml=xml+"\t\t\t\t</Time>\n";		
+						xml=xml+"\t\t\t</Class>\n";		
+					}
+				xml=xml+"\t\t</Lab_Course>\n";
+			}
+			xml=xml+"\t</Course>\n";
 		}
 		
+		
+		xml=xml+"</Response>\n";
+	
 		return xml;
 	}
-	private String getYear(String str) {
-		return str.substring(str.lastIndexOf('/'));
-	}
 	
-	private String getSemester(String start, String end) {
-		String month=start.substring(0,start.indexOf('/'));
-		int mon=Integer.parseInt(month);
-		if(mon==8){
-			return "Fall";
-		}
-		else if(mon==1){
-			return "Spring";
-		}
-		
-		//Summer
-		//A Begins May    Ends June
-		//B Begins June   Ends Aug
-		//C Begins May    Ends Aug
-		//D Begins May    Ends July
-		
-		else if(mon==5){//A or C or D
-			month=end.substring(0,end.indexOf('/'));
-			mon=Integer.parseInt(month);
-			if(mon==6)
-				return "Summer A";
-			else if(mon==8)
-				return "Summer C";
-			else if(mon==7)
-				return "Summer D";
-			else
-				return null;
-		}
-		else if(mon==6){//B
-			return "Summer B";
-		}
-		else
-			return null;
-	}
+	
 	private void return_html(String xml,ServletOutputStream outs){
 		String html="<HTML>\n" +
 						"<HEAD>\n" +
-						"\t<TITLE>Submitting Text Areas</TITLE>\n"+
+						"\t<TITLE>Servlet_Response</TITLE>\n"+
 						"</HEAD>\n"+
-						"<BODY BGCOLOR=\"#FDF5E6\">>\n" +xml+
+						"<BODY BGCOLOR=\"#FDF5E6\">>\n"+ "Servlet Response to XML<br>" +
+								"<textarea rows=\"50\" cols=\"100\">"+xml+
+								"</textarea>"+
 						"</BODY>\n";
-		
 		try {
 			outs.println(html);
+			outs.flush();
+			outs.close();
 		} catch (DOMException e) {
 			e.printStackTrace();
 		} catch (IOException e) {
 			e.printStackTrace();
-		}		
+		}catch (Exception e) {
+			e.printStackTrace();
+		}				
 		
 		return;
 		
@@ -275,7 +322,7 @@ public class Class_Servlet extends HttpServlet{ private static final long serial
 		return xml;
 	}
 	private static Connection getConnect() {
-		String url = "jdbc:mysql://192.168.1.104:3306/";
+		String url = "jdbc:mysql://boba.dyndns-server.com:3306/";
 	    String dbName = "School";
 	    String driver = "com.mysql.jdbc.Driver";
 	    String userName = "feldman"; 
@@ -292,4 +339,5 @@ public class Class_Servlet extends HttpServlet{ private static final long serial
 	      
 		return null;
 	}
+
 }

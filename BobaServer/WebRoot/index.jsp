@@ -8,7 +8,7 @@
         <FORM ACTION="/BobaServer/Class_Servlet" METHOD="POST">
             Please enter your text:
             <BR>
-            <TEXTAREA NAME="xml" ROWS="5" COLS="25"></TEXTAREA>
+            <TEXTAREA NAME="xml" ROWS="100" COLS="50"></TEXTAREA>
             <BR>
             <INPUT TYPE="SUBMIT" VALUE="Submit">
         </FORM>
